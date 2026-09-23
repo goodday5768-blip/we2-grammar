@@ -140,7 +140,22 @@ a.link{color:var(--acc);font-size:13px;cursor:pointer;text-decoration:underline}
   <section id="teacher" class="hide">
     <div class="tabs">
       <button id="tabOpen" class="on">시험 열기</button>
+      <button id="tabSheet" class="ghost">문제지</button>
       <button id="tabCollect" class="ghost">결과 모으기</button>
+    </div>
+
+    <div id="paneSheet" class="hide">
+      <div class="card">
+        <b>문제지 보기</b>
+        <p class="muted" style="margin:6px 0 8px">시험 코드를 넣으면 그 회차의 문제·정답·해설이 나옵니다.
+          <b>문제 번호는 모든 학생이 같습니다</b>(「3번 문제」로 부르셔도 됩니다). 다만 <b>보기 순서는 학생마다 달라서</b>
+          「(C)번이 답」이라고 하시면 안 되고 <b>답의 내용</b>으로 말씀하셔야 합니다.</p>
+        <div class="row"><input type="text" id="sheetCode" class="code" placeholder="XXXX-XXXX" maxlength="9"
+          autocomplete="off" spellcheck="false"></div>
+        <div class="row" style="margin-top:8px"><button class="small" id="showSheet">문제지 열기</button>
+          <span class="muted" id="sheetMsg"></span></div>
+      </div>
+      <div id="sheetBox"></div>
     </div>
 
     <div id="paneOpen">
@@ -289,10 +304,10 @@ function examItems(unit, seed) {
   take(rangeOf(unit).flatMap(n => D.items[n]), N - picked.length);
   return picked.slice(0, N);
 }
-/* 같은 문제지를 학생마다 다른 순서·다른 보기 배열로 — 옆사람 답이 소용없게 */
+/* 문제 순서는 반 전체가 같고(교수님이 「3번」으로 설명하실 수 있게), 보기 순서만 학생마다 다르다 */
 function paperFor(items, name, code) {
   const rnd = mulberry32(hashNum(name.trim() + '@' + code + '|' + D.salt) >>> 0);
-  const qs = shuf(items, rnd).map(it => {
+  const qs = items.map(it => {
     const perm = shuf([0, 1, 2, 3], rnd);
     return { id: it.id, u: it.u, part: it.part, point: it.point, q: it.q, ex: it.ex,
              opts: perm.map(i => it.opts[i]), ans: perm.indexOf(it.ans) };
@@ -454,8 +469,7 @@ function showResult() {
   cur.qs.forEach((q, i) => {
     const ok = cur.pick[i] === q.ans;
     const c = el('div', 'q');
-    c.append(el('div', 'qh', `<span class="no">${i + 1}</span><span class="mark ${ok ? 'o' : 'x'}">${ok ? '○ 정답' : '✕ 오답'}</span>`
-      + `<span class="tag">U${q.u} ${esc(q.point)}</span>`));
+    c.append(el('div', 'qh', `<span class="no">${i + 1}</span><span class="mark ${ok ? 'o' : 'x'}">${ok ? '○ 정답' : '✕ 오답'}</span>`));
     c.append(el('div', 'stem', esc(q.q).replace(/_{3,}/, '<u></u>')));
     q.opts.forEach((o, k) => {
       const cls = k === q.ans ? 'opt right' : (k === cur.pick[i] ? 'opt wrong' : 'opt');
@@ -495,6 +509,7 @@ function openExam() {
   $('#liveCode').textContent = code;
   $('#liveInfo').textContent = `Unit ${unit} · 범위 ${rangeLabel(unit)} · ${N}문제 · ${live.pass}문제 이상 합격 · 종료 ${hhmm(at)}`;
   $('#liveBox').classList.remove('hide');
+  $('#sheetCode').value = code;            // 「문제지」 탭에서 바로 열어 볼 수 있게
   $('#tMsg').textContent = '칠판에 코드를 적거나 링크를 단톡방에 올리세요. 학생이 코드를 넣는 순간 시험이 시작되고, 종료 시각에 전원이 자동 제출됩니다.';
   clearInterval(ttick);
   const upd = () => {
@@ -503,6 +518,23 @@ function openExam() {
     if (left <= 0) { clearInterval(ttick); $('#tMsg').innerHTML = '<b style="color:var(--no)">시험이 종료되었습니다.</b> 학생들에게 결과 한 줄을 받아 「결과 모으기」에 붙여넣으세요.'; }
   };
   upd(); ttick = setInterval(upd, 500);
+}
+function drawSheet() {
+  const c = unpackCode($('#sheetCode').value), box = $('#sheetBox');
+  if (!c) { $('#sheetMsg').innerHTML = '<span style="color:var(--no)">코드가 올바르지 않습니다.</span>'; box.innerHTML = ''; return; }
+  const u = D.units.find(x => x.n === c.unit);
+  $('#sheetMsg').textContent = `Unit ${c.unit} ${u.title} · 범위 ${rangeLabel(c.unit)} · ${N}문제 · ${c.pass}문제 이상 합격`;
+  const qs = paperFor(examItems(c.unit, c.seed), '__teacher__', c.code);   // 교수님용 기준 배열
+  box.innerHTML = '';
+  qs.forEach((q, i) => {
+    const d = el('div', 'q');
+    d.append(el('div', 'qh', `<span class="no">${i + 1}</span><span class="tag">U${q.u} ${esc(q.point)}</span>`));
+    d.append(el('div', 'stem', esc(q.q).replace(/_{3,}/, '<u></u>')));
+    q.opts.forEach((o, k) => d.append(el('label', k === q.ans ? 'opt right' : 'opt',
+      `<span>${k === q.ans ? '<b>✓ ' + esc(o) + '</b>' : esc(o)}</span>`)));
+    d.append(el('div', 'ex', '▸ ' + esc(q.ex)));
+    box.append(d);
+  });
 }
 function collect() { $('#roster').value = (store.get('roster', []) || []).join('\n'); drawResults(); }
 function drawResults() {
@@ -561,8 +593,17 @@ $('#code').oninput = () => {
 };
 $('#toTeacher').onclick = teacher;
 $('#tOpen').onclick = openExam;
-$('#tabOpen').onclick = () => { $('#tabOpen').className = 'on'; $('#tabCollect').className = 'ghost'; $('#paneOpen').classList.remove('hide'); $('#paneCollect').classList.add('hide'); };
-$('#tabCollect').onclick = () => { $('#tabCollect').className = 'on'; $('#tabOpen').className = 'ghost'; $('#paneCollect').classList.remove('hide'); $('#paneOpen').classList.add('hide'); collect(); };
+const TABS = [['tabOpen', 'paneOpen'], ['tabSheet', 'paneSheet'], ['tabCollect', 'paneCollect']];
+function pickTab(id) {
+  TABS.forEach(([t, p]) => { $('#' + t).className = t === id ? 'on' : 'ghost'; $('#' + p).classList.toggle('hide', t !== id); });
+  if (id === 'tabCollect') collect();
+}
+TABS.forEach(([t]) => $('#' + t).onclick = () => pickTab(t));
+$('#showSheet').onclick = drawSheet;
+$('#sheetCode').oninput = () => {
+  const v = $('#sheetCode').value.toUpperCase().replace(/[^A-Z2-9]/g, '').slice(0, 8);
+  $('#sheetCode').value = v.length > 4 ? v.slice(0, 4) + '-' + v.slice(4) : v;
+};
 $('#saveRoster').onclick = () => {
   const list = $('#roster').value.split('\n').map(s => s.trim()).filter(Boolean);
   store.set('roster', list); $('#rosterMsg').textContent = `${list.length}명 저장했습니다.`; drawResults();
