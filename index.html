@@ -138,6 +138,9 @@ const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':
 const CIRC = ['(A)', '(B)', '(C)', '(D)'];
 const PASS = D.pass;                                  // 합격에 필요한 정답 수 (= 문제 수)
 const N = D.per;                                      // 한 회 문제 수
+Object.entries(D.items).forEach(([n, arr]) => arr.forEach(it => it.u = +n));   // 문항마다 출처 단원
+const rangeOf = u => D.units.filter(x => x.n <= u).map(x => x.n);              // 누적 범위: Unit 1 ~ 선택 단원
+const rangeLabel = u => u === 1 ? 'Unit 1' : `Unit 1~${u}`;
 
 /* ── 저장소: 접두 we2g: — 다른 앱과 섞이지 않는다 ───────────────────── */
 const KEY = 'we2g:' + D.salt + ':';
@@ -166,35 +169,46 @@ function hash8(s) {                                    // 합격 코드용 간�
 const stamp = d => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')} `
   + `${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
 
-/* ── 출제: 안 나온 문항에서 Lesson A·C 고르게, 같은 틀은 한 회에 하나 ── */
+/* ── 출제: 누적 범위 — 오늘 단원 2문제(Lesson A·C 각 1) + 이전 단원 3문제 ───── */
 function makeRound(u) {
-  const all = D.items[u];
-  let seen = seenOf(u), pool = all.filter(it => !seen.has(it.id)), recycled = false;
-  if (pool.length < N) { store.del('seen' + u); seen = new Set(); pool = all.slice(); recycled = true; }
-  const want = {};                                     // A·C 몇 문제씩
-  const tags = [...new Set(all.map(it => it.part))].sort();
-  tags.forEach((t, i) => want[t] = Math.floor(N / tags.length) + (i < N % tags.length ? 1 : 0));
-  if (tags.length === 2 && Math.random() < .5) { const [a, b] = tags; const t = want[a]; want[a] = want[b]; want[b] = t; }
+  const key = 'seen' + u;                              // 출제 기록은 「Unit u 시험」 단위로 쌓인다
+  const seen = new Set(store.get(key, []));
   const picked = [], usedFrame = new Set();
-  for (const t of tags) {
-    for (const it of shuffle(pool.filter(x => x.part === t))) {
-      if (picked.filter(x => x.part === t).length >= want[t]) break;
-      if (usedFrame.has(frameOf(it.id))) continue;     // 같은 틀의 변형이 한 회에 둘 나오지 않게
-      picked.push(it); usedFrame.add(frameOf(it.id));
+  let recycled = false;
+  const take = (cands, want) => {                       // cands 중에서 want개를 새 문항 우선으로
+    let got = 0;
+    if (want <= 0) return 0;                            // 이미 다 찼으면 소진 판정을 내리지 않는다
+    const grab = pool => {
+      for (const it of shuffle(pool)) {
+        if (got >= want || picked.length >= N) return;
+        picked.push(it); usedFrame.add(frameOf(it.id)); got++;
+      }
+    };
+    grab(cands.filter(it => !seen.has(it.id) && !usedFrame.has(frameOf(it.id))));
+    if (got < want) {                                   // 이 갈래의 새 문항이 떨어졌다 → 그 갈래 기록만 비운다
+      cands.forEach(it => seen.delete(it.id)); recycled = true;
+      grab(cands.filter(it => !usedFrame.has(frameOf(it.id)) && !picked.includes(it)));
     }
+    if (got < want) grab(cands.filter(it => !picked.includes(it)));   // 끝자락이면 같은 틀이라도 채운다
+    return got;
+  };
+  const today = D.items[u], prev = rangeOf(u).filter(n => n !== u);
+  if (!prev.length) {                                   // Unit 1 시험 — 범위가 그 단원뿐
+    take(today.filter(x => x.part === 'A'), 2 + Math.round(Math.random()));
+    take(today.filter(x => x.part === 'C'), N - picked.length);
+  } else {
+    take(today.filter(x => x.part === 'A'), 1);         // 오늘 배운 문법 2문제는 반드시 낸다
+    take(today.filter(x => x.part === 'C'), 1);
+    take(today, 2 - picked.length);
+    const order = shuffle(prev);                        // 이전 단원은 돌아가며 한 문제씩
+    for (let i = 0; picked.length < N && i < order.length * 4; i++) take(D.items[order[i % order.length]], 1);
   }
-  for (const it of shuffle(pool)) {                    // 모자라면 다른 틀에서 채운다
-    if (picked.length >= N) break;
-    if (usedFrame.has(frameOf(it.id)) || picked.includes(it)) continue;
-    picked.push(it); usedFrame.add(frameOf(it.id));
-  }
-  for (const it of shuffle(pool)) {                    // 그래도 모자라면(은행 끝자락) 같은 틀이라도 채워 N문제를 보장
-    if (picked.length >= N) break;
-    if (!picked.includes(it)) picked.push(it);
-  }
+  take(rangeOf(u).flatMap(n => D.items[n]), N - picked.length);   // 최후 보루 — N문제를 보장
+  picked.forEach(it => seen.add(it.id));                // 나온 문제는 이 시험에서 다시 나오지 않는다
+  store.set(key, [...seen]);
   const qs = shuffle(picked).slice(0, N).map(it => {
     const perm = shuffle([0, 1, 2, 3]);
-    return { id: it.id, part: it.part, point: it.point, q: it.q, ex: it.ex,
+    return { id: it.id, u: it.u, part: it.part, point: it.point, q: it.q, ex: it.ex,
              opts: perm.map(i => it.opts[i]), ans: perm.indexOf(it.ans), pick: null };
   });
   balance(qs);
@@ -251,7 +265,7 @@ function home() {
     if (only && u.n !== only) return;
     const p = pass[u.n];
     const b = el('button', 'unit' + (p ? ' pass' : '') + (sel === u.n ? ' on' : ''),
-      `Unit ${u.n} ${p ? '<span class="badge">✓ 합격</span>' : ''}<span class="t">${esc(u.title)}</span>`);
+      `Unit ${u.n} ${p ? '<span class="badge">✓ 합격</span>' : ''}<span class="t">${esc(u.title)}</span><span class="t">범위 ${rangeLabel(u.n)}</span>`);
     b.onclick = () => { store.set('unit', u.n); home(); bar(); };
     box.append(b);
   });
@@ -278,12 +292,14 @@ function paint() {
   $('#quizHead').textContent = `Unit ${u.n} ${u.title} — 문법 능력평가`;
   const tries = (store.get('try' + cur.unit, 0)) + 1;
   $('#quizSub').innerHTML = `${tries}회차 · ${cur.qs.length}문제 · <b>${PASS}문제 모두 맞혀야 합격</b>`
-    + (cur.recycled ? ' · <span style="color:var(--no)">새 문제가 모자라 처음부터 다시 냅니다</span>' : '')
-    + `<br><span class="muted">${u.points.map(p => esc(p.point)).join(' · ')}</span>`;
+    + (cur.recycled ? ' · <span style="color:var(--no)">새 문제가 모자라 앞서 나온 문제도 섞입니다</span>' : '')
+    + `<br><span class="muted">범위 <b>${rangeLabel(cur.unit)}</b>`
+    + (cur.unit > 1 ? ` · 오늘 ${u.points.map(p => esc(p.point)).join(' · ')} 2문제 + 앞 단원 복습 ${N - 2}문제` : ` · ${u.points.map(p => esc(p.point)).join(' · ')}`)
+    + '</span>';
   const box = $('#qs'); box.innerHTML = '';
   cur.qs.forEach((q, i) => {
     const c = el('div', 'q');
-    c.append(el('div', 'qh', `<span class="no">${i + 1}</span><span class="tag">${esc(q.point)}</span>`));
+    c.append(el('div', 'qh', `<span class="no">${i + 1}</span><span class="tag">U${q.u} ${esc(q.point)}</span>`));
     c.append(el('div', 'stem', esc(q.q).replace(/_{3,}/, '<u></u>')));
     q.opts.forEach((o, k) => {
       const lb = el('label', 'opt');
@@ -305,7 +321,6 @@ function grade() {
   const score = cur.qs.filter(q => q.pick === q.ans).length;
   cur.passed = score >= PASS;
   const u = cur.unit;
-  const seen = seenOf(u); cur.qs.forEach(q => seen.add(q.id)); store.set('seen' + u, [...seen]);
   const tries = (store.get('try' + u, 0)) + 1; store.set('try' + u, tries);
   const at = stamp(new Date());
   const log = logOf(); log.push({ u, try: tries, score, pass: cur.passed, at }); store.set('log', log.slice(-200));
@@ -322,8 +337,8 @@ function grade() {
   if (cur.passed) {
     const nm = store.get('name', '');
     const base = `${nm}|${u}|${tries}|${at}|${D.salt}`;
-    $('#certMsg').textContent = `[${D.title} 합격]\n이름: ${nm}\n단원: Unit ${u} ${title}\n`
-      + `문법: ${D.units.find(x => x.n === u).points.map(p => p.point).join(' · ')}\n`
+    $('#certMsg').textContent = `[${D.title} 합격]\n이름: ${nm}\n단원: Unit ${u} ${title}\n범위: ${rangeLabel(u)}\n`
+      + `오늘 문법: ${D.units.find(x => x.n === u).points.map(p => p.point).join(' · ')}\n`
       + `결과: ${cur.qs.length}문제 모두 정답 (${tries}회차)\n시각: ${at}\n인증: ${hash8(base)}`;
   }
 
@@ -332,7 +347,7 @@ function grade() {
     const ok = q.pick === q.ans;
     const c = el('div', 'q');
     c.append(el('div', 'qh', `<span class="no">${i + 1}</span><span class="mark ${ok ? 'o' : 'x'}">${ok ? '○ 정답' : '✕ 오답'}</span>`
-      + `<span class="tag">${esc(q.point)}</span>`));
+      + `<span class="tag">U${q.u} ${esc(q.point)}</span>`));
     c.append(el('div', 'stem', esc(q.q).replace(/_{3,}/, '<u></u>')));
     q.opts.forEach((o, k) => {
       const cls = k === q.ans ? 'opt right' : (k === q.pick ? 'opt wrong' : 'opt');
@@ -381,8 +396,9 @@ function addPaste() {
 $('#appTitle').insertAdjacentText('afterbegin', D.title);
 $('#appSub').textContent = D.sub;
 document.title = D.title;
-$('#intro').innerHTML = `그날 배운 단원을 골라 <b>${N}문제</b>를 풉니다. <b>${PASS}문제를 모두 맞혀야 합격</b>이고, `
-  + `합격하지 못하면 <b>앞서 나오지 않은 새 문제</b>로 다시 풉니다. 단원마다 ${D.perUnit}문항이 준비되어 있습니다.`;
+$('#intro').innerHTML = `그날 배운 단원을 고르면 <b>그 단원까지가 시험 범위</b>입니다(Unit 3 → Unit 1~3). `
+  + `한 회 <b>${N}문제</b>(오늘 단원 2문제 + 앞 단원 복습 ${N - 2}문제)를 풀어 <b>${PASS}문제 모두 맞혀야 합격</b>이고, `
+  + `합격하지 못하면 <b>앞서 나오지 않은 새 문제</b>로 다시 풉니다.`;
 $('#name').value = store.get('name', '');
 $('#name').oninput = bar;
 $('#toTeacher').onclick = teacher;
