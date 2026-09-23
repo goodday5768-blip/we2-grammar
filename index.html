@@ -389,7 +389,7 @@ function paint() {
   const box = $('#qs'); box.innerHTML = '';
   cur.qs.forEach((q, i) => {
     const c = el('div', 'q');
-    c.append(el('div', 'qh', `<span class="no">${i + 1}</span><span class="tag">U${q.u} ${esc(q.point)}</span>`));
+    c.append(el('div', 'qh', `<span class="no">${i + 1}</span>`));   // 시험 중에는 문법 이름을 밝히지 않는다(답의 종류가 드러난다)
     c.append(el('div', 'stem', esc(q.q).replace(/_{3,}/, '<u></u>')));
     q.opts.forEach((o, k) => {
       const lb = el('label', 'opt' + (cur.pick[i] === k ? ' pick' : ''));
